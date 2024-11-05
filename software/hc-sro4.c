@@ -1,237 +1,250 @@
-#include <linux/cdev.h>
-#include <linux/init.h>
-#include <linux/delay.h>
-#include <linux/fs.h>
-#include <linux/gpio.h>
-#include <linux/interrupt.h>
-#include <linux/kdev_t.h>
+/*
+ * SOLUTION: Uebung 4: Implementation einer GPIO Schnittstelle
+ * In dieser Übung soll mittels Button-Interrupts eine LED an einem separaten Pin an- und ausgeschaltet werden.
+ * Hierzu ist keine Userapp notwendig, da die ganze Logik auf im Kernelspace abläuft.
+ */
+
 #include <linux/module.h>
-#include <linux/semaphore.h>
-#include <linux/timekeeping.h>
-#include <linux/uaccess.h>
-#include <linux/wait.h>
-#include <asm/atomic.h>
+#include <linux/init.h>
+#include <linux/mod_devicetable.h>
+#include <linux/property.h>
+#include <linux/platform_device.h>
+#include <linux/of_device.h>
+#include <linux/gpio/consumer.h>
+#include <linux/proc_fs.h>
+#include <linux/interrupt.h>
 
-#define GPIO_TRIGGER (26)
-#define GPIO_ECHO  (6)
+/*
+ * Platform driver function declarations
+ */
+static int dt_probe(struct platform_device *pdev);
+static int dt_remove(struct platform_device *pdev);
+static ssize_t my_write(struct file *File, const char *user_buffer, size_t count, loff_t *offs);
 
-struct cdev *hc_sr04_cdev;
-int drv_major = 0;
-int gpio_irq_number;
+/*
+ * Platform driver global variables
+ */
+static struct proc_dir_entry *proc_file;
 
-wait_queue_head_t wait_for_echo;
-volatile int condition_echo;
+/*
+ * GPIO related global variables
+ */
+static struct gpio_desc *my_led = NULL;
+static struct gpio_desc *my_interrupt = NULL;
+static irqreturn_t my_interrupt_handler(int, void *dev_id);
+const char* gpio_string = "my_pins";
 
-volatile ktime_t ktime_start, ktime_end;
-
-/* There should be a minimum of 60 ms between to measurements.
-   Therefore the time of the last measurement is stored. */
-ktime_t ktime_last_measurement;
-
-// Only one process shall be able to open the device at the same time
-atomic_t opened = ATOMIC_INIT(-1);
-
-// Only one thread of execution shall read at the same time since a read triggers a HW measurement
-DEFINE_SEMAPHORE(read_semaphore);
-
-
-// Interrupt handling for falling and rising edge
-static irqreturn_t gpio_echo_irq_handler(int irq, void *dev_id) {
-    int gpio_value;
-
-    gpio_value = gpio_get_value(GPIO_ECHO);
-  
-    // Rising edge -> start measuring time
-    if (gpio_value == 1) {
-        ktime_start = ktime_get();
-    }
-    // Falling edge -> store time and wakeup read-function
-    else if (gpio_value == 0) {
-        ktime_end = ktime_get();       
-            
-        condition_echo = 1;
-        wake_up_interruptible(&wait_for_echo);
-    }
+/*
+ * Implementation of interrupt handler
+ */
+static irqreturn_t my_interrupt_handler(int irq, void *dev_id)
+{
+    printk("dt_gpio - Interrupt received!\n");
     
+    // Toggle the LED GPIO
+    if (!IS_ERR_OR_NULL(my_led)) {
+        int value = gpiod_get_value(my_led);
+        gpiod_set_value(my_led, !value);
+    } else {
+        printk("dt_gpio - Error: LED GPIO not initialized\n");
+    }
+
     return IRQ_HANDLED;
 }
 
-ssize_t hc_sr04_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
-{
-    long remaining_delay;
-    ktime_t elapsed_time;
-    unsigned int range_mm;
+/*
+ * Platform driver operatations
+ */
+static struct proc_ops fops = {
+	.proc_write = my_write,
+};
 
-    if (*f_pos > 0) {
-        return 0; // EOF
-    }
+/*
+ * Define an array of device IDs that are compatible.
+ * This will be matched in the device tree in the
+ * probe() function later.
+ */
+static struct of_device_id my_driver_ids[] = {
+	{
+		.compatible = "brightlight,mydev",
+	}, { /* sentinel */ }
+};
 
-    // Allow only one thread of execution to enter read as read triggers a measurement
-    if (down_interruptible(&read_semaphore)) {
-        return -ERESTARTSYS;
-    };
+/*
+ * Define platform driver instance with desired
+ * functions (probe and remove in this case)
+ */
+static struct platform_driver my_driver = {
+	.probe = dt_probe,
+	.remove = dt_remove,
+	.driver = {
+		.name = "my_device_driver",
+		.of_match_table = my_driver_ids,
+	},
+};
 
-    // Diff to last measurement should be minimum 60 milliseconds
-    if (ktime_to_ms(ktime_sub(ktime_get(), ktime_last_measurement)) < 60) {
-        pr_warn("[HC-SR04]: Diff to last measurement in ms: %lld\n", ktime_to_ms(ktime_sub(ktime_get(), ktime_last_measurement)));
-        up(&read_semaphore);
-        return -EBUSY;
-    }
-    
-    ktime_last_measurement = ktime_get();
-
-    // Reset condition for waking up
-    condition_echo = 0;
-
-    // Trigger measurement
-    gpio_set_value(GPIO_TRIGGER, 1);
-    udelay(10); // A minimum period if 10us is needed to trigger a measurement
-    gpio_set_value(GPIO_TRIGGER, 0);
-    
-    // Wait until the interrupt for the falling edge happened
-    // A timeout of 100ms is configured 
-    remaining_delay = wait_event_interruptible_timeout(wait_for_echo, condition_echo, HZ / 10);
-
-    if (remaining_delay == 0) {
-        // No falling edge was detected, something went wrong
-        pr_warn("[HC-SR04]: 100ms timeout in measurement\n");
-        up(&read_semaphore);
-        return -EAGAIN;
-    }    
-elapsed_time = ktime_sub(ktime_end, ktime_start);
-
-    /* 
-    Calculate range in mm
-    range = high level time * velocity (340M/S) / 2
-    range in mm = (high level time in us * 340 / 2) / 1000 
-    */
-    range_mm = ((unsigned int) ktime_to_us(elapsed_time)) * 340u / 2u / 1000u;
-
-
-    if (copy_to_user(buf, &range_mm, sizeof(range_mm))) {
-        up(&read_semaphore);
-        return -EFAULT;
-    }
-
-    *f_pos += sizeof(range_mm);
-
-    up(&read_semaphore);
-    return sizeof(range_mm);
+/*
+ * Write function for the platform driver.
+ * This function is called when data is written to the associated file.
+ */
+static ssize_t my_write(struct file *File, const char *user_buffer, size_t count, loff_t *offs) {
+	switch (user_buffer[0]) {
+		case '0':
+		case '1':
+			gpiod_set_value(my_led, user_buffer[0] - '0');
+		default:
+			break;
+	}
+	return count;
 }
 
-int hc_sr04_open(struct inode *inode, struct file *filp) {
-    // Allow only one process to open the device at the same time
-    if (atomic_inc_and_test(&opened)) {
-        return 0;
-    }
-    else {
-        return -EBUSY;
-    }
+/*
+ * Probe function for the platform device.
+ * This function is called when the device is beeing probed.
+ */
+static int dt_probe(struct platform_device *pdev) {
+	struct device *dev = &pdev->dev;
+	const char *label;
+	int my_value, ret;
+
+	printk("dt_gpio - Now I am in the probe function!\n");
+
+	/* Check for device properties */
+	if(!device_property_present(dev, "label")) {
+		printk("dt_gpio - Error! Device property 'label' not found!\n");
+		return -1;
+	}
+	if(!device_property_present(dev, "my_value")) {
+		printk("dt_gpio - Error! Device property 'my_value' not found!\n");
+		return -1;
+	}
+	if(!device_property_present(dev, "my_pins-gpio")) {
+		printk("dt_gpio - Error! Device property 'my_pins-gpio' not found!\n");
+		return -1;
+	}
+
+	/* Read device properties */
+	ret = device_property_read_string(dev, "label", &label);
+	if(ret) {
+		printk("dt_gpio - Error! Could not read 'label'\n");
+		return -1;
+	}
+	printk("dt_gpio - label: %s\n", label);
+	ret = device_property_read_u32(dev, "my_value", &my_value);
+	if(ret) {
+		printk("dt_gpio - Error! Could not read 'my_value'\n");
+		return -1;
+	}
+	printk("dt_gpio - my_value: %d\n", my_value);
+
+	/* Init GPIO */
+	my_led = gpiod_get_index(dev, gpio_string, 0, GPIOD_OUT_LOW);
+	if(IS_ERR(my_led)) {
+		printk("dt_gpio - Error! Could not setup the GPIO\n");
+		return -1 * IS_ERR(my_led);
+	}
+	printk("Initialized everything!\n");
+
+    my_interrupt = gpiod_get_index(dev, gpio_string, 1, GPIOD_IN);
+        if (IS_ERR(my_interrupt)) {
+            printk("dt_gpio - Error! Could not get the interrupt GPIO\n");
+            ret = PTR_ERR(my_interrupt);
+            goto cleanup;
+        }
+
+	int irq = gpiod_to_irq(my_interrupt);
+
+	
+	ret = request_irq(irq, my_interrupt_handler, IRQF_TRIGGER_FALLING, "my_device", NULL);
+        if (ret) {
+            printk("dt_gpio - Error! Could not set gpio up for interrupt\n");
+            goto cleanup;
+        }
+
+
+	/* Creating procfs file */
+	proc_file = proc_create("my-led", 0666, NULL, &fops);
+	if(proc_file == NULL) {
+		printk("procfs_test - Error creating /proc/my-led\n");
+		gpiod_put(my_led);
+		gpiod_put(my_interrupt);
+
+		return -ENOMEM;
+	}
+
+	return 0;
+
+cleanup:
+    if (!IS_ERR_OR_NULL(my_led))
+        gpiod_put(my_led);
+    if (!IS_ERR_OR_NULL(my_interrupt))
+        gpiod_put(my_interrupt);
+    if (proc_file)
+        proc_remove(proc_file);
+    return ret;
+
 }
 
-int hc_sr04_release(struct inode *inode, struct file *filp) {
-    atomic_set(&opened, -1);
+/*
+ * Remove function for the platform device.
+ * This function is called when the device is being removed.
+ * removes proc_file and frees GPIO
+ */
+static int dt_remove(struct platform_device *pdev) {
+	printk("dt_gpio - Now I am in the remove function\n");
+    free_irq(gpiod_to_irq(my_interrupt), NULL);
+	gpiod_put(my_interrupt);
+    gpiod_put(my_led);
+    proc_remove(proc_file);
 	return 0;
 }
 
-struct file_operations hc_sr04_fops = {
-	.owner =     THIS_MODULE,
-	.read =	     hc_sr04_read,
-	.open =	     hc_sr04_open,
-	.release =   hc_sr04_release
-};
-
-static int hc_sr04_init(void)
-{
-    int result;
-    dev_t dev = MKDEV(drv_major, 0);
-
-    pr_info("[HC-SR04]: Initializing HC-SR04\n");
-
-    result = alloc_chrdev_region(&dev, 0, 1, "hc-sr04");
-    drv_major = MAJOR(dev);
-
-    if (result < 0) {
-        pr_alert("[HC-SR04]: Error in alloc_chrdev_region\n");
-        return result;
-    }
-
-    hc_sr04_cdev = cdev_alloc();
-    hc_sr04_cdev->ops = &hc_sr04_fops;
-
-    result = cdev_add(hc_sr04_cdev, dev, 1);
-    if (result < 0) {
-        pr_alert("[HC-SR04]: Error in cdev_add\n");
-        unregister_chrdev_region(dev, 1);
-        return result;
-    }
-
-    if (gpio_is_valid(GPIO_TRIGGER) == false)
-    {
-        pr_err("[HC-SR04]: GPIO %d is not valid\n", GPIO_TRIGGER);
-        return -1;
-    }
-
-    if (gpio_request(GPIO_TRIGGER, "GPIO_TRIGGER") < 0)
-    {
-        pr_err("[HC-SR04]: ERROR: GPIO %d request\n", GPIO_TRIGGER);
-        gpio_free(GPIO_TRIGGER);
-        return -1;
-    }
-
-    gpio_direction_output(GPIO_TRIGGER, 0);
-    gpio_set_value(GPIO_TRIGGER, 0);
-
-    if (gpio_is_valid(GPIO_ECHO) == false)
-    {
-        pr_err("[HC-SR04]: GPIO %d is not valid\n", GPIO_TRIGGER);
-        return -1;
-    }
-    
-    if (gpio_request(GPIO_ECHO, "GPIO_ECHO") < 0){
-        pr_err("[HC-SR04]: ERROR: GPIO %d request\n", GPIO_ECHO);
-        return -1;
-    }
-
-    gpio_direction_input(GPIO_ECHO);
-
-    gpio_irq_number = gpio_to_irq(GPIO_ECHO);
-  
-    if (request_irq(gpio_irq_number,           
-                  (void *)gpio_echo_irq_handler,   
-                  IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,  // Handler will be called in rising and falling edge
-                  "hc-sr04",              
-                  NULL)) {                 
-        pr_err("[HC-SR04]: Cannot register interrupt number: %d\n", gpio_irq_number);
-        return -1;
-    }
-
-    init_waitqueue_head(&wait_for_echo);
-    ktime_last_measurement = ktime_set(0, 0);
-    return 0;
+/*
+ * Initialization function for the driver module.
+ * This function is called when the module is loaded into the kernel.
+ * It registers the platform driver with the kernel.
+ */
+static int __init my_init(void) {
+	printk("dt_gpio - Loading the driver...\n");
+	if(platform_driver_register(&my_driver)) {
+		printk("dt_gpio - Error! Could not load driver\n");
+		return -1;
+	}
+	return 0;
 }
 
-static void hc_sr04_exit(void)
-{
-    dev_t dev = MKDEV(drv_major, 0);
-    cdev_del(hc_sr04_cdev);
-
-    unregister_chrdev_region(dev, 1);
-
-    gpio_set_value(GPIO_TRIGGER, 0);
-    gpio_free(GPIO_TRIGGER);
-
-    free_irq(gpio_irq_number, NULL);
-
-    gpio_free(GPIO_ECHO);
-
-    pr_info("[HC-SR04]: Exit HC-SR04\n");
+/*
+ * Exit function for the driver module.
+ * This function is called when the module is unloaded from the kernel.
+ * It unregisters the platform driver.
+ */
+static void __exit my_exit(void) {
+	printk("dt_gpio - Unload driver");
+	platform_driver_unregister(&my_driver);
 }
 
+/*
+ * Link open firmware ("of") to the before defined 
+ * my_driver_ids array.
+ */
+MODULE_DEVICE_TABLE(of, my_driver_ids);
 
-MODULE_AUTHOR("Christian H.");
-MODULE_DESCRIPTION("Linux device driver for HC-SR04 ultrasonic distance sensor");
+/*
+ * Specify the entry and exit points for the driver.
+ * These are executed when the driver is loaded or 
+ * removed from the kernel.
+ */
+module_init(my_init);
+module_exit(my_exit);
+
+/*
+ * Add licensing and other information to the driver
+ */
 MODULE_LICENSE("GPL");
+MODULE_AUTHOR("-");
+MODULE_DESCRIPTION("-");
 
-module_init(hc_sr04_init);
-module_exit(hc_sr04_exit);
+/*
+ * To load the device tree overlay after compilation, use:
+ * sudo dtoverlay testoverlay.dtbo
+ */
