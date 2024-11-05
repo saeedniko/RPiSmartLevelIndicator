@@ -7,16 +7,16 @@ A smart level indicator system using a Raspberry Pi, OLED display, ultrasonic se
 
 Use the following command to compile the Device Tree Source (DTS) file into a Device Tree Blob (DTBO):
 
-dtc -@ -I dts -O dtb -o test_overlay.dtbo test_overlay.dts
+`dtc -@ -I dts -O dtb -o OverLaysSR04.dtbo OverLaysSR04.dts`
 
 ## 2.Apply the Overlay
 
 Load the compiled overlay with the following command:
 
-sudo dtoverlay test_overlay.dtbo
+`sudo dtoverlay OverLaysSR04.dtbo`
 
 ## 3.Build the Project
 
 Compile the necessary code by running:
 
-make
+`make`
