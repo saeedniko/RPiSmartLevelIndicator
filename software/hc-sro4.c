@@ -11,6 +11,7 @@
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/timekeeping.h>
+#include <linux/interrupt.h>
 
 #define DRIVER_NAME "hc_sr04_driver"
 #define TRIGGER_PULSE_US 10
@@ -23,6 +24,7 @@ static ktime_t start_time, end_time;
 static struct timer_list measure_timer;
 static struct proc_dir_entry *proc_file;
 static char distance_buffer[64];
+static int echo_irq;
 
 static irqreturn_t echo_irq_handler(int irq, void *dev_id) 
 {
@@ -57,8 +59,8 @@ static void trigger_measurement(struct timer_list *t)
 	mod_timer(&measure_timer, jiffies + msecs_to_jiffies(MEASURE_INTERVAL_MS));
 }
 
-static int proc_read(struct file *file, char __user *user_buf, size_t count, loff_t *ppos) {
-	return simple_read_from_buffer(user_buf, count, ppos, distance_buffer, strlen(distance_buffer));
+static ssize_t proc_read(struct file *file, char __user *user_buf, size_t count, loff_t *ppos) {
+    return simple_read_from_buffer(user_buf, count, ppos, distance_buffer, strlen(distance_buffer));
 }
 
 static const struct proc_ops proc_fops = {
