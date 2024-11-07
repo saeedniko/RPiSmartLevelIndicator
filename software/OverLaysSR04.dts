@@ -6,11 +6,11 @@
 		target-path = "/"; 							// path to where overlay will be applied
 		__overlay__ {								// indicates that all following properties will be overlaid onto the base device tree.
 			my_device {								// defines a new device node named "my_device".
-				compatible = "brightlight,mydev";	// compatible string for device (must match driver)
+				compatible = "my_hc_sr04";			// compatible string for device (must match driver)
 				status = "okay";
-				label = "Test";
-				my_value = <12>;
-				my_pins-gpio = <&gpio 18 0>, <&gpio 24 2>; 
+				label = "HC-SR04 Driver";
+				trigger-gpio = <&gpio 18 0>;
+				echo-gpio <&gpio 24 2>; 
 			};
 		};
 	};
