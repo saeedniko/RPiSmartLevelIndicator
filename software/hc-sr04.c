@@ -107,8 +107,8 @@ static int hc_sr04_probe(struct platform_device *pdev)
 		goto cleanup_irq;
     }
 
-	timer_setup(&measurement_timer, trigger_measurement, 0);
-	mod_timer(&measurement_timer, jiffies + msecs_to_jiffies(MEASURE_INTERVAL_MS));
+	timer_setup(&measure_timer, trigger_measurement, 0);
+	mod_timer(&measure_timer, jiffies + msecs_to_jiffies(MEASURE_INTERVAL_MS));
 
 	printk(KERN_INFO "my_hc-sr04 - Device initialized successfully\n");
 	return 0;

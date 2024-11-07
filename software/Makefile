@@ -1,4 +1,4 @@
-obj-m += timer_driver.o
+obj-m += hc-sr04.o
 KDIR = /lib/modules/$(shell uname -r)/build
 
 all:
