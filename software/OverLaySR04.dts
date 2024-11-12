@@ -9,8 +9,8 @@
 				compatible = "my_hc_sr04";			// compatible string for device (must match driver)
 				status = "okay";
 				label = "HC-SR04 Driver";
-				trigger-gpio = <&gpio 18 0>;
-				echo-gpio <&gpio 24 2>; 
+				trigger_gpio = <&gpio 18 0>;
+				echo_gpio <&gpio 24 2>; 
 			};
 		};
 	};
