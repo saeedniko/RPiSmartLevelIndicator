@@ -10,7 +10,7 @@
 				status = "okay";
 				label = "HC-SR04 Driver";
 				trigger_gpio = <&gpio 18 0>;
-				echo_gpio <&gpio 24 2>; 
+				echo_gpio = <&gpio 24 2>; 
 			};
 		};
 	};
