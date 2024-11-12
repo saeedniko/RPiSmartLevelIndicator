@@ -1,0 +1,17 @@
+/dts-v1/;
+/plugin/;
+/ {
+	compatible = "brcm,bcm2711";
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			my_device {
+				compatible = "my_hc_sr04";
+				status = "okay";
+				label = "HC-SR04 Driver";
+				trigger-gpio = <&gpio 18 0>;
+				echo-gpio = <&gpio 24 2>;
+			};
+		};
+	};
+};
