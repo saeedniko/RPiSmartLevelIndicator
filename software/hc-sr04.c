@@ -15,7 +15,7 @@
 
 #define DRIVER_NAME "hc_sr04_driver"
 #define TRIGGER_PULSE_US 10
-#define MEASURE_INTERVAL_MS 100
+#define MEASURE_INTERVAL_MS 70
 #define OUTPUT_NAME "hc_sr04_distance"
 
 static struct gpio_desc *trigger_gpio = NULL;
@@ -29,7 +29,6 @@ static int echo_irq;
 static irqreturn_t echo_irq_handler(int irq, void *dev_id) 
 {
 	int gpio_state = gpiod_get_value(echo_gpio);
-	printk(KERN_INFO "my_hc-sr04 - Trigger measurment %d",gpio_state);
 
 	if (gpio_state) {
 		start_time = ktime_get();
@@ -41,7 +40,6 @@ static irqreturn_t echo_irq_handler(int irq, void *dev_id)
 		if (travel_time_us > 0) {
 			int distance_cm = travel_time_us / 58;
 			snprintf(distance_buffer, sizeof(distance_buffer), "Measured distance: %d cm\n", distance_cm);
-			printk(KERN_INFO "my_hc-sr04 - Calculated distance: %d cm\n", distance_cm);
         } else {
 			snprintf(distance_buffer, sizeof(distance_buffer), "Error: Invalid travel time\n");
 		}
@@ -60,8 +58,7 @@ static void trigger_measurement(struct timer_list *t)
 }
 
 static ssize_t proc_read(struct file *file, char __user *user_buf, size_t count, loff_t *ppos) {
-    printk(KERN_INFO "my_hc-sr04 - proc read\n");
-    return simple_read_from_buffer(user_buf, count, ppos, distance_buffer, strlen(distance_buffer));
+	return simple_read_from_buffer(user_buf, count, ppos, distance_buffer, strlen(distance_buffer));
 }
 
 static const struct proc_ops proc_fops = {
