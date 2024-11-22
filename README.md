@@ -25,4 +25,4 @@ Compile the necessary code by running:
 
 Load the kernel driver with the command:
 
-'sudo insmod hc-s404.ko'
+`sudo insmod hc-s404.ko`
