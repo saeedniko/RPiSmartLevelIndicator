@@ -20,3 +20,9 @@ Load the compiled overlay with the following command:
 Compile the necessary code by running:
 
 `make`
+
+## 4.import kernel
+
+Load the kernel driver with the command:
+
+'sudo insmod hc-s404.ko'
