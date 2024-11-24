@@ -49,22 +49,27 @@ def display_distance_and_visual_percentage(max_height, diameter):
     while True:
         distance = read_distance()
         if distance is not None:
-            distance_in_meters = distance / 100.0
+            if distance < 10:
+                distance_in_meters = 0
+            else:
+                distance_in_meters = (distance - 10) / 100.0
             
             percentage_full = calculate_percentage(distance_in_meters, max_height)
+            percentage_full = max(0, min(percentage_full, 100))
             
             radius = diameter / 2
             volume = 3.14159 * (radius ** 2) * (max_height - distance_in_meters) * 1000
+            volume = max(0, volume)
             
             visual_height = int((percentage_full / 100) * 100)
             visual_height = max(0, min(visual_height, 100))
 
             with canvas(device) as draw:
                 draw.text((10, 0), f"Tank: {percentage_full:.2f}%", font=font, fill="white")
-                draw.text((10, 20), f"Vol: {volume:.2f}L", font=font, fill="white")
+                draw.text((10, 13), f"Vol: {volume:.2f}L", font=font, fill="white")
 
-                draw.rectangle((10, 35, 118, 125), outline="white", width=1)
-                draw.rectangle((12, 125 - visual_height, 116, 125), fill="blue")
+                draw.rectangle((10, 25, 118, 128), outline="white", width=1)
+                draw.rectangle((12, 126 - visual_height, 116, 127), fill="blue")
         else:
             with canvas(device) as draw:
                 draw.text((10, 10), "Error: No data", font=font, fill="white")
