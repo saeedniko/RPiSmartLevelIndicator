@@ -39,7 +39,7 @@ static irqreturn_t echo_irq_handler(int irq, void *dev_id)
 
 		if (travel_time_us > 0) {
 			int distance_cm = travel_time_us / 58;
-			snprintf(distance_buffer, sizeof(distance_buffer), "Measured distance: %d cm\n", distance_cm);
+			snprintf(distance_buffer, sizeof(distance_buffer), "%d\n", distance_cm);
         } else {
 			snprintf(distance_buffer, sizeof(distance_buffer), "Error: Invalid travel time\n");
 		}
